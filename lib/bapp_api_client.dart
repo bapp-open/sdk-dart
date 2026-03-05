@@ -21,13 +21,27 @@ class PagedList<T> extends Iterable<T> {
   String toString() => 'PagedList(count=$count, length=$length)';
 }
 
+/// API client for the BAPP platform.
+///
+/// Supports authentication via Bearer (JWT/OAuth) or Token (API key),
+/// entity CRUD, pagination, tasks, file uploads, and long-running
+/// async operations with automatic polling.
 class BappApiClient {
+  /// The API host URL (e.g. `https://app.bapp.ro/api`).
   String host;
+
+  /// The tenant ID for multi-tenant requests.
   String? tenant;
+
+  /// The application slug (defaults to `account`).
   String app;
+
   String? _authHeader;
   final http.Client _http;
 
+  /// Creates a new [BappApiClient].
+  ///
+  /// Provide either [bearer] for JWT/OAuth or [token] for API key auth.
   BappApiClient({
     String? bearer,
     String? token,
@@ -37,8 +51,11 @@ class BappApiClient {
     http.Client? httpClient,
   }) : _http = httpClient ?? http.Client() {
     host = host.replaceAll(RegExp(r'/+$'), '');
-    if (bearer != null) _authHeader = 'Bearer $bearer';
-    else if (token != null) _authHeader = 'Token $token';
+    if (bearer != null) {
+      _authHeader = 'Bearer $bearer';
+    } else if (token != null) {
+      _authHeader = 'Token $token';
+    }
   }
 
   Map<String, String> _buildHeaders([Map<String, String>? extra]) {
