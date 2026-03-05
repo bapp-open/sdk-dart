@@ -3,6 +3,7 @@ description: A Dart client for the BAPP platform API. Supports CRUD, pagination,
 version: 0.3.0
 homepage: https://www.bapp.ro
 repository: https://github.com/bapp-open/sdk-dart
+publisher: bapp.ro
 topics:
   - api
   - client
