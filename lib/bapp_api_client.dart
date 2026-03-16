@@ -245,6 +245,7 @@ class BappApiClient {
     String output = 'html',
     String? label,
     String? variation,
+    bool download = false,
   }) {
     final views = getDocumentViews(record);
     if (views.isEmpty) return null;
@@ -269,12 +270,21 @@ class BappApiClient {
       if (v != null && v.isNotEmpty) {
         url += '&variation=$v';
       }
+      if (download) {
+        url += '&download=true';
+      }
       return url;
     }
 
     // Legacy view_token
-    const actions = {'pdf': 'pdf.download', 'context': 'pdf.context'};
-    final action = actions[output] ?? 'pdf.preview';
+    String action;
+    if (output == 'pdf') {
+      action = download ? 'pdf.download' : 'pdf.view';
+    } else if (output == 'context') {
+      action = 'pdf.context';
+    } else {
+      action = 'pdf.preview';
+    }
     return '$host/documents/$action?token=$token';
   }
 
@@ -287,8 +297,9 @@ class BappApiClient {
     String output = 'html',
     String? label,
     String? variation,
+    bool download = false,
   }) async {
-    final url = getDocumentUrl(record, output: output, label: label, variation: variation);
+    final url = getDocumentUrl(record, output: output, label: label, variation: variation, download: download);
     if (url == null) return null;
     final response = await _http.get(Uri.parse(url));
     if (response.statusCode < 200 || response.statusCode >= 300) {
