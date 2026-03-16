@@ -191,6 +191,114 @@ class BappApiClient {
   Future<dynamic> delete(String contentType, String id) =>
       _request('DELETE', '/content-type/$contentType/$id/');
 
+  // -- document views -----------------------------------------------------
+
+  /// Extract available document views from a record.
+  ///
+  /// Works with both `public_view` (new) and `view_token` (legacy) formats.
+  /// Returns a list of maps with keys: `label`, `token`, `type`,
+  /// `variations`, and `default_variation`.
+  List<Map<String, dynamic>> getDocumentViews(Map<String, dynamic> record) {
+    final views = <Map<String, dynamic>>[];
+    final publicView = record['public_view'];
+    if (publicView is List) {
+      for (final entry in publicView) {
+        if (entry is Map) {
+          views.add({
+            'label': entry['label'] ?? '',
+            'token': entry['view_token'] ?? '',
+            'type': 'public_view',
+            'variations': entry['variations'],
+            'default_variation': entry['default_variation'],
+          });
+        }
+      }
+    }
+    final viewToken = record['view_token'];
+    if (viewToken is List) {
+      for (final entry in viewToken) {
+        if (entry is Map) {
+          views.add({
+            'label': entry['label'] ?? '',
+            'token': entry['view_token'] ?? '',
+            'type': 'view_token',
+            'variations': null,
+            'default_variation': null,
+          });
+        }
+      }
+    }
+    return views;
+  }
+
+  /// Build a document render/download URL from a record.
+  ///
+  /// Works with both `public_view` and `view_token` formats.
+  /// Prefers `public_view` when both are present on a record.
+  ///
+  /// [output] is the desired format: `"html"`, `"pdf"`, `"jpg"`, or `"context"`.
+  /// [label] selects a specific view by label (first match wins).
+  /// [variation] is a variation code for `public_view` entries (e.g. `"v4"`).
+  /// Falls back to the entry's `default_variation` when null.
+  String? getDocumentUrl(
+    Map<String, dynamic> record, {
+    String output = 'html',
+    String? label,
+    String? variation,
+  }) {
+    final views = getDocumentViews(record);
+    if (views.isEmpty) return null;
+
+    Map<String, dynamic>? view;
+    if (label != null) {
+      for (final v in views) {
+        if (v['label'] == label) {
+          view = v;
+          break;
+        }
+      }
+    }
+    view ??= views[0];
+
+    final token = view['token'] as String?;
+    if (token == null || token.isEmpty) return null;
+
+    if (view['type'] == 'public_view') {
+      var url = '$host/render/$token?output=$output';
+      final v = variation ?? view['default_variation'] as String?;
+      if (v != null && v.isNotEmpty) {
+        url += '&variation=$v';
+      }
+      return url;
+    }
+
+    // Legacy view_token
+    const actions = {'pdf': 'pdf.download', 'context': 'pdf.context'};
+    final action = actions[output] ?? 'pdf.preview';
+    return '$host/documents/$action?token=$token';
+  }
+
+  /// Fetch document content (PDF, HTML, JPG, etc.) as bytes.
+  ///
+  /// Builds the URL via [getDocumentUrl] and performs a plain GET request.
+  /// Returns `null` when the record has no view tokens.
+  Future<List<int>?> getDocumentContent(
+    Map<String, dynamic> record, {
+    String output = 'html',
+    String? label,
+    String? variation,
+  }) async {
+    final url = getDocumentUrl(record, output: output, label: label, variation: variation);
+    if (url == null) return null;
+    final response = await _http.get(Uri.parse(url));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('BappApiClient: GET $url failed with ${response.statusCode}');
+    }
+    return response.bodyBytes;
+  }
+
+  // -- tasks ---------------------------------------------------------------
+
   /// List all available task codes.
   Future<dynamic> listTasks() => _request('GET', '/tasks');
 

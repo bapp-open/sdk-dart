@@ -1,6 +1,6 @@
 name: bapp_api_client
 description: A Dart client for the BAPP platform API. Supports CRUD, pagination, tasks, file uploads, and long-running async operations.
-version: 0.4.0
+version: 0.4.1
 homepage: https://www.bapp.ro
 repository: https://github.com/bapp-open/sdk-dart
 topics:

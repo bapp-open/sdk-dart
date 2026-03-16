@@ -9,7 +9,7 @@ simple, consistent interface for authentication, entity CRUD, and task execution
 
 ```yaml
 dependencies:
-  bapp_api_client: ^0.4.0
+  bapp_api_client: ^0.4.1
 ```
 
 ### 2. Create a client
@@ -87,6 +87,9 @@ client.app = 'wms';
 | `delete(content_type, id)` | Delete an entity |
 | `list_introspect(content_type)` | Get list view metadata |
 | `detail_introspect(content_type)` | Get detail view metadata |
+| `get_document_views(record)` | Extract available views from a record |
+| `get_document_url(record, output?, label?, variation?)` | Build a render/download URL |
+| `get_document_content(record, output?, label?, variation?)` | Fetch document bytes (PDF, HTML, JPG) |
 | `list_tasks()` | List available task codes |
 | `detail_task(code)` | Get task configuration |
 | `run_task(code, payload?)` | Execute a task |
@@ -122,6 +125,40 @@ await client.create('myapp.document', {
   'file': await http.MultipartFile.fromPath('file', 'report.pdf'),
 });
 ```
+
+## Document Views
+
+Records may include `public_view` and/or `view_token` fields with JWT tokens
+for rendering documents (invoices, orders, reports, etc.) as HTML, PDF, or images.
+
+The SDK normalises both formats and builds the correct URL automatically:
+
+```dart
+final order = await client.get('company_order.order', '42');
+
+// Get a PDF download URL (auto-detects public_view vs view_token)
+final url = client.getDocumentUrl(order, output: 'pdf');
+
+// Pick a specific view by label
+final url2 = client.getDocumentUrl(order, output: 'html', label: 'Comanda interna');
+
+// Use a variation
+final url3 = client.getDocumentUrl(order, output: 'pdf', variation: 'v4');
+
+// Fetch the actual content as bytes
+final pdfBytes = await client.getDocumentContent(order, output: 'pdf');
+if (pdfBytes != null) File('order.pdf').writeAsBytesSync(pdfBytes);
+
+// Enumerate all available views
+final views = client.getDocumentViews(order);
+for (final v in views) {
+  print('${v['label']} ${v['type']} ${v['variations']}');
+}
+```
+
+`get_document_views()` returns a list of normalised view entries with `label`,
+`token`, `type` (`"public_view"` or `"view_token"`), `variations`, and
+`default_variation`. Use it to enumerate available views (e.g. for a dropdown).
 
 ## Tasks
 
