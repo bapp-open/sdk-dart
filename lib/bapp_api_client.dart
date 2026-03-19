@@ -37,6 +37,7 @@ class BappApiClient {
   String app;
 
   String? _authHeader;
+  String? userAgent;
   final http.Client _http;
 
   /// Creates a new [BappApiClient].
@@ -48,6 +49,7 @@ class BappApiClient {
     this.host = 'https://panel.bapp.ro/api',
     this.tenant,
     this.app = 'account',
+    this.userAgent,
     http.Client? httpClient,
   }) : _http = httpClient ?? http.Client() {
     host = host.replaceAll(RegExp(r'/+$'), '');
@@ -60,6 +62,7 @@ class BappApiClient {
 
   Map<String, String> _buildHeaders([Map<String, String>? extra]) {
     final h = <String, String>{};
+    if (userAgent != null) h['User-Agent'] = userAgent!;
     if (_authHeader != null) h['Authorization'] = _authHeader!;
     if (tenant != null) h['x-tenant-id'] = tenant!;
     h['x-app-slug'] = app;
