@@ -9,7 +9,7 @@ simple, consistent interface for authentication, entity CRUD, and task execution
 
 ```yaml
 dependencies:
-  bapp_api_client: ^0.4.3
+  bapp_api_client: ^0.4.4
 ```
 
 ### 2. Create a client
