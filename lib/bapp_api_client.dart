@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io' show File;
+import 'dart:math';
 import 'package:http/http.dart' as http;
 
 /// A list of results with pagination metadata.
@@ -40,6 +41,14 @@ class BappApiClient {
   String? userAgent;
   final http.Client _http;
 
+  /// HTTP request timeout.
+  final Duration timeout;
+
+  /// Maximum number of retries on transient errors.
+  final int maxRetries;
+
+  final Random _rand = Random();
+
   /// Creates a new [BappApiClient].
   ///
   /// Provide either [bearer] for JWT/OAuth or [token] for API key auth.
@@ -50,6 +59,8 @@ class BappApiClient {
     this.tenant,
     this.app = 'account',
     this.userAgent,
+    this.timeout = const Duration(seconds: 30),
+    this.maxRetries = 3,
     http.Client? httpClient,
   }) : _http = httpClient ?? http.Client() {
     host = host.replaceAll(RegExp(r'/+$'), '');
@@ -108,38 +119,55 @@ class BappApiClient {
     }
 
     final h = _buildHeaders(headers);
-    http.Response response;
 
-    if (body != null && _hasFiles(body)) {
-      response = await _sendMultipart(method.toUpperCase(), uri, body as Map, h);
-    } else {
-      switch (method.toUpperCase()) {
-        case 'GET':
-          response = await _http.get(uri, headers: h);
-        case 'POST':
-          h['Content-Type'] = 'application/json';
-          response = await _http.post(uri, headers: h, body: body != null ? jsonEncode(body) : null);
-        case 'PUT':
-          h['Content-Type'] = 'application/json';
-          response = await _http.put(uri, headers: h, body: body != null ? jsonEncode(body) : null);
-        case 'PATCH':
-          h['Content-Type'] = 'application/json';
-          response = await _http.patch(uri, headers: h, body: body != null ? jsonEncode(body) : null);
-        case 'DELETE':
-          response = await _http.delete(uri, headers: h);
-        default:
-          final request = http.Request(method.toUpperCase(), uri);
-          request.headers.addAll(h);
-          final streamed = await _http.send(request);
-          response = await http.Response.fromStream(streamed);
+    for (var attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        http.Response response;
+
+        if (body != null && _hasFiles(body)) {
+          response = await _sendMultipart(method.toUpperCase(), uri, body as Map, h).timeout(timeout);
+        } else {
+          switch (method.toUpperCase()) {
+            case 'GET':
+              response = await _http.get(uri, headers: h).timeout(timeout);
+            case 'POST':
+              h['Content-Type'] = 'application/json';
+              response = await _http.post(uri, headers: h, body: body != null ? jsonEncode(body) : null).timeout(timeout);
+            case 'PUT':
+              h['Content-Type'] = 'application/json';
+              response = await _http.put(uri, headers: h, body: body != null ? jsonEncode(body) : null).timeout(timeout);
+            case 'PATCH':
+              h['Content-Type'] = 'application/json';
+              response = await _http.patch(uri, headers: h, body: body != null ? jsonEncode(body) : null).timeout(timeout);
+            case 'DELETE':
+              response = await _http.delete(uri, headers: h).timeout(timeout);
+            default:
+              final request = http.Request(method.toUpperCase(), uri);
+              request.headers.addAll(h);
+              final streamed = await _http.send(request).timeout(timeout);
+              response = await http.Response.fromStream(streamed);
+          }
+        }
+
+        final code = response.statusCode;
+        if ((code == 429 || code >= 500) && attempt < maxRetries) {
+          final backoff = min(pow(2, attempt) + _rand.nextDouble(), 10.0);
+          await Future.delayed(Duration(milliseconds: (backoff * 1000).toInt()));
+          continue;
+        }
+
+        if (code < 200 || code >= 300) {
+          throw Exception('BappApiClient: $method $path failed with $code');
+        }
+        if (code == 204 || response.body.isEmpty) return null;
+        return jsonDecode(response.body);
+      } on Exception {
+        if (attempt >= maxRetries) rethrow;
+        final backoff = min(pow(2, attempt) + _rand.nextDouble(), 10.0);
+        await Future.delayed(Duration(milliseconds: (backoff * 1000).toInt()));
       }
     }
-
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('BappApiClient: $method $path failed with ${response.statusCode}');
-    }
-    if (response.statusCode == 204 || response.body.isEmpty) return null;
-    return jsonDecode(response.body);
+    return null; // unreachable
   }
 
   /// Get current user profile.
@@ -268,15 +296,15 @@ class BappApiClient {
     if (token == null || token.isEmpty) return null;
 
     if (view['type'] == 'public_view') {
-      var url = '$host/render/$token?output=$output';
+      final params = <String, String>{'output': output};
       final v = variation ?? view['default_variation'] as String?;
       if (v != null && v.isNotEmpty) {
-        url += '&variation=$v';
+        params['variation'] = v;
       }
       if (download) {
-        url += '&download=true';
+        params['download'] = 'true';
       }
-      return url;
+      return Uri.parse('$host/render/$token').replace(queryParameters: params).toString();
     }
 
     // Legacy view_token
@@ -288,7 +316,7 @@ class BappApiClient {
     } else {
       action = 'pdf.preview';
     }
-    return '$host/documents/$action?token=$token';
+    return Uri.parse('$host/documents/$action').replace(queryParameters: {'token': token}).toString();
   }
 
   /// Fetch document content (PDF, HTML, JPG, etc.) as bytes.
@@ -304,11 +332,38 @@ class BappApiClient {
   }) async {
     final url = getDocumentUrl(record, output: output, label: label, variation: variation, download: download);
     if (url == null) return null;
-    final response = await _http.get(Uri.parse(url));
+    final response = await _http.get(Uri.parse(url)).timeout(timeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('BappApiClient: GET $url failed with ${response.statusCode}');
     }
     return response.bodyBytes;
+  }
+
+  /// Stream document content directly to a file.
+  ///
+  /// Like [getDocumentContent] but streams to [dest] without buffering
+  /// the entire document in memory.
+  /// Returns `true` if the document was saved, `false` if no view tokens.
+  Future<bool> downloadDocument(
+    Map<String, dynamic> record,
+    String dest, {
+    String output = 'html',
+    String? label,
+    String? variation,
+    bool download = false,
+  }) async {
+    final url = getDocumentUrl(record, output: output, label: label, variation: variation, download: download);
+    if (url == null) return false;
+    final request = http.Request('GET', Uri.parse(url));
+    final streamed = await _http.send(request).timeout(timeout);
+    if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+      throw Exception('BappApiClient: GET $url failed with ${streamed.statusCode}');
+    }
+    final file = File(dest);
+    final sink = file.openWrite();
+    await streamed.stream.pipe(sink);
+    await sink.close();
+    return true;
   }
 
   // -- tasks ---------------------------------------------------------------
